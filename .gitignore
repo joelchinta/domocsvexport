@@ -1,5 +1,0 @@
-.env
-node_modules/
-exporter/downloads/
-.env.example
-.DS_Store
