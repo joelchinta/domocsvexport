@@ -1,34 +1,30 @@
-// OAuth only
-const req = ['DOMO_BASE_URL','DOMO_USERNAME','DOMO_PASSWORD','DOMO_VENDOR_ID','EMAIL_USER','EMAIL_TO'];
-const google = ['GOOGLE_CLIENT_ID','GOOGLE_CLIENT_SECRET','GOOGLE_REFRESH_TOKEN'];
+// Minimal, helpful pre-run validation + visibility in logs
+const must = [
+  "DOMO_BASE_URL",
+  "DOMO_USERNAME",
+  "DOMO_PASSWORD",
+  "EMAIL_USER",
+  "EMAIL_TO",
+  "GOOGLE_CLIENT_ID",
+  "GOOGLE_CLIENT_SECRET",
+  "GOOGLE_REFRESH_TOKEN"
+];
 
-function show(keys, label){
-  console.log(`[${label}]`);
-  for(const k of keys){
-    const v = process.env[k];
-    console.log(`${k}:`, v && v.trim().length ? `set (${v.trim().length} chars)` : 'NOT SET');
+console.log("[required env]");
+let ok = true;
+for (const k of must) {
+  const val = process.env[k];
+  if (!val) {
+    console.log(`❌ ${k}: MISSING`);
+    ok = false;
+  } else {
+    console.log(`✅ ${k}: set (${String(val).length} chars)`);
   }
 }
 
-show(req, 'required');
-show(google, 'google');
-
-const missing = req.filter(k => !process.env[k]?.trim());
-const hasGoogle = google.every(k => process.env[k]?.trim());
-
-if (missing.length) {
-  console.error(`Missing required env: ${missing.join(', ')}`);
-  process.exit(2);
+if (!ok) {
+  console.error("Preflight failed: missing env.");
+  process.exit(1);
+} else {
+  console.log("Preflight passed.");
 }
-if (!hasGoogle) {
-  console.error('Google OAuth not configured. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN.');
-  process.exit(2);
-}
-
-// simple sanity
-if (!/^[^@]+@[^@]+\.[^@]+$/.test(process.env.EMAIL_USER)) {
-  console.error('EMAIL_USER does not look like an email address');
-  process.exit(2);
-}
-
-console.log('Preflight passed.');
