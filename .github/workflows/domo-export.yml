@@ -1,5 +1,8 @@
 name: Domo Export
 
+permissions:
+  contents: read
+
 on:
   repository_dispatch:
     types: [domo_export]
