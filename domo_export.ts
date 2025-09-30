@@ -1,6 +1,7 @@
 import { chromium } from 'playwright';
 import * as dotenv from 'dotenv';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
+import type { Cell } from 'exceljs';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as nodemailer from 'nodemailer';
@@ -31,7 +32,62 @@ if (!hasBasicSmtpCreds && !hasGoogleOAuthCreds) {
     throw new Error('Missing email credentials: provide either EMAIL_HOST/EMAIL_PORT/EMAIL_PASS or GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REFRESH_TOKEN');
 }
 
-const XLSXLib: typeof XLSX & { default?: typeof XLSX } = (XLSX as any).default ?? (XLSX as any);
+const SENSITIVE_ENV_KEYS = [
+    'DOMO_BASE_URL',
+    'DOMO_USERNAME',
+    'DOMO_PASSWORD',
+    'DOMO_VENDOR_ID',
+    'EMAIL_USER',
+    'EMAIL_PASS',
+    'EMAIL_HOST',
+    'EMAIL_PORT',
+    'EMAIL_TO',
+    'EMAIL_SUBJECT',
+    'EMAIL_BODY',
+    'GOOGLE_CLIENT_ID',
+    'GOOGLE_CLIENT_SECRET',
+    'GOOGLE_REFRESH_TOKEN'
+] as const;
+
+const sensitiveEnvValues = SENSITIVE_ENV_KEYS
+    .map((key) => process.env[key])
+    .filter((value): value is string => Boolean(value));
+
+function maskSensitiveData(value: string): string {
+    return sensitiveEnvValues.reduce((masked, secret) => {
+        if (!secret) {
+            return masked;
+        }
+        return masked.split(secret).join('[REDACTED]');
+    }, value);
+}
+
+function sanitizeError(error: unknown): string {
+    if (error instanceof Error) {
+        if (error.stack) {
+            return maskSensitiveData(error.stack);
+        }
+        return maskSensitiveData(error.message);
+    }
+
+    if (typeof error === 'string') {
+        return maskSensitiveData(error);
+    }
+
+    try {
+        return maskSensitiveData(JSON.stringify(error));
+    } catch {
+        return 'Unknown error';
+    }
+}
+
+function logSanitizedError(context: string, error: unknown) {
+    console.error(`${context}: ${sanitizeError(error)}`);
+}
+
+function logSanitizedInfo(message: string) {
+    console.log(maskSensitiveData(message));
+}
 
 const SENSITIVE_ENV_KEYS = [
     'DOMO_BASE_URL',
@@ -89,6 +145,85 @@ function ensureDirectoryExists(filePath: string) {
     if (!fs.existsSync(directory)) {
         fs.mkdirSync(directory, { recursive: true });
     }
+}
+
+function escapeCsvValue(value: string): string {
+    const normalized = value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const escaped = normalized.replace(/"/g, '""');
+    if (escaped.includes(',') || escaped.includes('"') || escaped.includes('\n')) {
+        return `"${escaped}"`;
+    }
+    return escaped;
+}
+
+function getCellText(cell: Cell): string {
+    if (cell.text) {
+        return cell.text;
+    }
+
+    const value = cell.value as unknown;
+    if (value === null || value === undefined) {
+        return '';
+    }
+
+    if (value instanceof Date) {
+        return value.toISOString();
+    }
+
+    if (typeof value === 'object') {
+        if ('text' in value && typeof (value as { text?: unknown }).text === 'string') {
+            return (value as { text: string }).text;
+        }
+
+        if ('richText' in value && Array.isArray((value as { richText?: Array<{ text: string }> }).richText)) {
+            return ((value as { richText: Array<{ text: string }> }).richText)
+                .map((part) => part.text)
+                .join('');
+        }
+
+        if ('result' in value && (value as { result?: unknown }).result !== undefined && (value as { result?: unknown }).result !== null) {
+            return String((value as { result: unknown }).result);
+        }
+    }
+
+    return String(value);
+}
+
+async function convertXlsxToCsv(xlsxPath: string, csvPath: string) {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(xlsxPath);
+
+    const worksheet = workbook.worksheets[0];
+    if (!worksheet) {
+        throw new Error('Downloaded workbook does not contain any worksheets.');
+    }
+
+    const columnCount = Math.max(worksheet.actualColumnCount, worksheet.columnCount);
+    const rowCount = Math.max(worksheet.actualRowCount, worksheet.rowCount);
+    const rows: string[] = [];
+
+    for (let rowNumber = 1; rowNumber <= rowCount; rowNumber += 1) {
+        const row = worksheet.getRow(rowNumber);
+        const values: string[] = [];
+
+        for (let column = 1; column <= columnCount; column += 1) {
+            const cell = row.getCell(column);
+            const text = getCellText(cell);
+            values.push(escapeCsvValue(text));
+        }
+
+        while (values.length && values[values.length - 1] === '') {
+            values.pop();
+        }
+
+        rows.push(values.join(','));
+    }
+
+    while (rows.length && rows[rows.length - 1] === '') {
+        rows.pop();
+    }
+
+    await fs.promises.writeFile(csvPath, rows.join('\n'), 'utf8');
 }
 
 function formatTemplate(template: string, startDate: string, endDate: string) {
@@ -255,27 +390,20 @@ async function main() {
         await download.saveAs(xlsxPath);
 
         // Convert XLSX to CSV
-        const workbook = XLSXLib.readFile(xlsxPath);
         const csvPath = `./exporter/downloads/domo_export_${startDate}_to_${endDate}.csv`;
-        
-        // Get the first worksheet
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        
-        // Convert to CSV and save
-        const csvContent = XLSXLib.utils.sheet_to_csv(worksheet);
-        fs.writeFileSync(csvPath, csvContent);
+
+        await convertXlsxToCsv(xlsxPath, csvPath);
 
         // Delete the XLSX file if you don't need it
-        fs.unlinkSync(xlsxPath);
+        await fs.promises.unlink(xlsxPath);
 
         // Send email with CSV attachment
         const recipientCount = await sendReportEmail(csvPath, startDate, endDate);
 
-        console.log('Export completed successfully!');
-        console.log(`Date range: ${startDate} to ${endDate}`);
-        console.log(`File saved as: ${path.basename(csvPath)}`);
-        console.log(`Email sent to ${recipientCount} recipient(s).`);
+        logSanitizedInfo('Export completed successfully!');
+        logSanitizedInfo(`Date range: ${startDate} to ${endDate}`);
+        logSanitizedInfo(`File saved as: ${path.basename(csvPath)}`);
+        logSanitizedInfo(`Email sent to ${recipientCount} recipient(s).`);
 
     } catch (error) {
         logSanitizedError('An error occurred', error);

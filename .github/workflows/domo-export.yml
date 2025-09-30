@@ -23,6 +23,23 @@ jobs:
 
       - run: npx playwright install --with-deps chromium
 
+      - name: Mask sensitive secrets in logs
+        run: |
+          echo "::add-mask::${{ secrets.DOMO_BASE_URL }}"
+          echo "::add-mask::${{ secrets.DOMO_USERNAME }}"
+          echo "::add-mask::${{ secrets.DOMO_PASSWORD }}"
+          echo "::add-mask::${{ secrets.DOMO_VENDOR_ID }}"
+          echo "::add-mask::${{ secrets.EMAIL_USER }}"
+          echo "::add-mask::${{ secrets.EMAIL_TO }}"
+          echo "::add-mask::${{ secrets.EMAIL_HOST }}"
+          echo "::add-mask::${{ secrets.EMAIL_PORT }}"
+          echo "::add-mask::${{ secrets.EMAIL_PASS }}"
+          echo "::add-mask::${{ secrets.GOOGLE_CLIENT_ID }}"
+          echo "::add-mask::${{ secrets.GOOGLE_CLIENT_SECRET }}"
+          echo "::add-mask::${{ secrets.GOOGLE_REFRESH_TOKEN }}"
+          echo "::add-mask::${{ secrets.EMAIL_SUBJECT }}"
+          echo "::add-mask::${{ secrets.EMAIL_BODY }}"
+
       - run: npm start
         env:
           DOMO_BASE_URL: ${{ secrets.DOMO_BASE_URL }}
