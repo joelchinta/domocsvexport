@@ -142,4 +142,89 @@ async function getPreviousMondayAndSunday(): Promise<[string, string]> {
     const today = new Date();
     const lastMonday = new Date(today);
     // First, go back to this week's Monday
-    lastMonday.setDate(today.getDa
+    lastMonday.setDate(today.getDate() - today.getDay() + 1);
+    // Then go back one more week
+    lastMonday.setDate(lastMonday.getDate() - 7);
+    
+    const lastSunday = new Date(lastMonday);
+    lastSunday.setDate(lastMonday.getDate() + 6);
+
+    // Format dates as YYYY-MM-DD
+    const formatDate = (date: Date) => {
+        return date.toISOString().split('T')[0];
+    };
+
+    return [formatDate(lastMonday), formatDate(lastSunday)];
+}
+
+async function main() {
+    const browser = await chromium.launch({
+        headless: true
+    });
+
+    try {
+        const context = await browser.newContext();
+        const page = await context.newPage();
+
+        // Login
+        await page.goto(`${process.env.DOMO_BASE_URL}/session/login`);
+        await page.locator('input[name="username"]').click();
+        await page.locator('input[name="username"]').fill(process.env.DOMO_USERNAME!);
+        await page.locator('input[name="password"]').fill(process.env.DOMO_PASSWORD!);
+        await page.getByRole('button', { name: 'Sign in' }).click();
+
+        // Wait for login to complete
+        await page.waitForTimeout(2000);
+
+        // Get date range
+        const [startDate, endDate] = await getPreviousMondayAndSunday();
+
+        // Navigate directly to the transaction slip URL
+        const url = `${process.env.DOMO_BASE_URL}/transactions/slipSingle/${process.env.DOMO_VENDOR_ID}/${startDate}/${endDate}/1`;
+        await page.goto(url);
+
+        // Wait for the page to load
+        await page.waitForLoadState('networkidle');
+
+        // Wait for table to load and export button to be visible
+        await page.waitForSelector('.dt-button.buttons-excel');
+
+        // Setup download promise before clicking the export button
+        const downloadPromise = page.waitForEvent('download');
+        
+        // Click the Excel export button
+        await page.click('.dt-button.buttons-excel');
+
+        // Wait for the download to start and save the file
+        const download = await downloadPromise;
+        const xlsxPath = `./exporter/downloads/domo_export_${startDate}_to_${endDate}.xlsx`;
+        ensureDirectoryExists(xlsxPath);
+        await download.saveAs(xlsxPath);
+
+        // Convert XLSX to CSV using ExcelJS
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.readFile(xlsxPath);
+        const worksheet = workbook.worksheets[0];
+        const csvPath = `./exporter/downloads/domo_export_${startDate}_to_${endDate}.csv`;
+        await workbook.csv.writeFile(csvPath);
+
+        // Delete the XLSX file if you don't need it
+        fs.unlinkSync(xlsxPath);
+
+        // Send email with CSV attachment
+        const recipientCount = await sendReportEmail(csvPath, startDate, endDate);
+
+        console.log('Export completed successfully!');
+        console.log(`Date range: ${startDate} to ${endDate}`);
+        console.log(`File saved as: ${path.basename(csvPath)}`);
+        console.log(`Email sent to ${recipientCount} recipient(s).`);
+
+    } catch (error) {
+        console.error('An error occurred:', error);
+        throw error;
+    } finally {
+        await browser.close();
+    }
+}
+
+main().catch(console.error);
