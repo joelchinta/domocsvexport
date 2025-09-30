@@ -21,7 +21,8 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci --ignore-scripts --no-audit --no-fund
+      # Use npm install, not ci, since xlsx resolves from a tarball URL
+      - run: npm install --no-audit --no-fund
 
       - run: npx playwright install --with-deps chromium
 
