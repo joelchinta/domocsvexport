@@ -7,8 +7,8 @@
     "start": "node --experimental-strip-types domo_export.ts"
   },
   "dependencies": {
-    "@googleapis/gmail": "^8.3.0",
     "dotenv": "^17.2.3",
+    "googleapis": "^131.0.0",
     "playwright": "^1.47.2",
     "xlsx": "^0.18.5"
   }
