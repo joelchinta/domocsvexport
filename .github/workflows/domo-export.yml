@@ -1,41 +1,47 @@
 name: Domo Export
 
-permissions:
-  contents: read
-
 on:
   repository_dispatch:
     types: [domo_export]
   workflow_dispatch:
 
-env:
-  PLAYWRIGHT_BROWSERS_PATH: 0
+permissions:
+  contents: read
 
 jobs:
   run-export:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955   # pin commit
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # pin commit
         with:
           node-version: '22'
+          cache: 'npm'
 
-      - name: Optional payload overrides from webhook
+      - name: Install deps without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Security audit (prod only)
         run: |
-          if [ -f "$GITHUB_EVENT_PATH" ] && command -v jq >/dev/null 2>&1; then
-            VENDOR=$(jq -r '.client_payload.vendorId // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)
-            if [ -n "$VENDOR" ]; then echo "DOMO_VENDOR_ID=$VENDOR" >> "$GITHUB_ENV"; fi
-            SUBJECT=$(jq -r '.client_payload.emailSubject // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)
-            if [ -n "$SUBJECT" ]; then echo "EMAIL_SUBJECT=$SUBJECT" >> "$GITHUB_ENV"; fi
+          npm audit --only=prod --json > audit.json || true
+          if jq -e '.metadata.vulnerabilities.high > 0 or .metadata.vulnerabilities.critical > 0' audit.json >/dev/null; then
+            echo "::warning::High or critical vulnerabilities detected. See audit.json artifact."
           fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: npm-audit
+          path: audit.json
 
-      - run: npm ci
-
-      - run: npx playwright install --with-deps chromium
-
-      - run: npm start
+      - name: Run exporter
         env:
+          PLAYWRIGHT_BROWSERS_PATH: 0
           DOMO_BASE_URL: ${{ secrets.DOMO_BASE_URL }}
           DOMO_USERNAME: ${{ secrets.DOMO_USERNAME }}
           DOMO_PASSWORD: ${{ secrets.DOMO_PASSWORD }}
@@ -50,3 +56,4 @@ jobs:
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
           EMAIL_SUBJECT: ${{ env.EMAIL_SUBJECT != '' && env.EMAIL_SUBJECT || secrets.EMAIL_SUBJECT }}
           EMAIL_BODY: ${{ secrets.EMAIL_BODY }}
+        run: node --experimental-strip-types domo_export.ts
