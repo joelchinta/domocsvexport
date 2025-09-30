@@ -1,7 +1,8 @@
 import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { chromium, Download } from "playwright";
+import { chromium } from "playwright";
+import type { Download } from "playwright";
 import * as XLSX from "xlsx";
 import { sendWithGmailAPI } from "./mailer_gmail.ts";
 
