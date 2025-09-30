@@ -1,41 +1,52 @@
-name: Domo Export
+# .github/workflows/run-export.yml
+name: run-export
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 12 * * 1' # Mondays at 12:00 UTC
-
-env:
-  PLAYWRIGHT_BROWSERS_PATH: 0
+    - cron: "0 6 * * *"  # adjust
 
 jobs:
   run-export:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: 0
+      NODE_OPTIONS: --enable-source-maps
+      # Secrets must be set in repo or org:
+      DOMO_BASE_URL: ${{ secrets.DOMO_BASE_URL }}
+      DOMO_USERNAME: ${{ secrets.DOMO_USERNAME }}
+      DOMO_PASSWORD: ${{ secrets.DOMO_PASSWORD }}
+      EMAIL_USER: ${{ secrets.EMAIL_USER }}
+      EMAIL_TO: ${{ secrets.EMAIL_TO }}
+      GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+      GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+      GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+      EMAIL_SUBJECT: "DOMO CSV export"
+      EMAIL_BODY: "Attached are the latest CSV exports."
 
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 22
+          cache: npm
 
-      - run: npm ci
-
+      - run: npm install --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
 
-      - run: npm start
-        env:
-          DOMO_BASE_URL: ${{ secrets.DOMO_BASE_URL }}
-          DOMO_USERNAME: ${{ secrets.DOMO_USERNAME }}
-          DOMO_PASSWORD: ${{ secrets.DOMO_PASSWORD }}
-          DOMO_VENDOR_ID: ${{ secrets.DOMO_VENDOR_ID }}
-          EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
-          EMAIL_HOST: ${{ secrets.EMAIL_HOST }}
-          EMAIL_PORT: ${{ secrets.EMAIL_PORT }}
-          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
-          EMAIL_SUBJECT: ${{ secrets.EMAIL_SUBJECT }}
-          EMAIL_BODY: ${{ secrets.EMAIL_BODY }}
+      - name: Preflight
+        run: node preflight.mjs
+
+      - name: Prepare download dir
+        run: mkdir -p exporter/downloads
+
+      - name: Run export
+        run: node --experimental-strip-types domo_export.ts
+
+      - name: Upload CSVs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: domo-csv
+          path: exporter/downloads/*.csv
+          if-no-files-found: ignore
