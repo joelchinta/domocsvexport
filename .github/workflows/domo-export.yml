@@ -1,60 +1,47 @@
-name: Domo Export
+# .github/workflows/run-export.yml
+name: run-export
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 12 * * 1' # Mondays 12:00 UTC. For 12:00 Brunei use 0 4 * * 1.
-
-env:
-  PLAYWRIGHT_BROWSERS_PATH: 0
-  NODE_OPTIONS: --enable-source-maps
+    - cron: "0 6 * * *"  # adjust
 
 jobs:
   run-export:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: 0
+      NODE_OPTIONS: --enable-source-maps
+      # Secrets must be set in repo or org:
+      DOMO_BASE_URL: ${{ secrets.DOMO_BASE_URL }}
+      DOMO_USERNAME: ${{ secrets.DOMO_USERNAME }}
+      DOMO_PASSWORD: ${{ secrets.DOMO_PASSWORD }}
+      EMAIL_USER: ${{ secrets.EMAIL_USER }}
+      EMAIL_TO: ${{ secrets.EMAIL_TO }}
+      GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+      GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+      GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+      EMAIL_SUBJECT: "DOMO CSV export"
+      EMAIL_BODY: "Attached are the latest CSV exports."
 
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
-      # Use npm install, not ci, since xlsx resolves from a tarball URL
       - run: npm install --no-audit --no-fund
-
       - run: npx playwright install --with-deps chromium
 
-      - name: Preflight env check
+      - name: Preflight
         run: node preflight.mjs
-        env:
-          DOMO_BASE_URL: ${{ secrets.DOMO_BASE_URL }}
-          DOMO_USERNAME: ${{ secrets.DOMO_USERNAME }}
-          DOMO_PASSWORD: ${{ secrets.DOMO_PASSWORD }}
-          DOMO_VENDOR_ID: ${{ secrets.DOMO_VENDOR_ID }}
-          EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
 
-      - run: mkdir -p exporter/downloads
+      - name: Prepare download dir
+        run: mkdir -p exporter/downloads
 
-      - name: Run exporter
+      - name: Run export
         run: node --experimental-strip-types domo_export.ts
-        env:
-          DOMO_BASE_URL: ${{ secrets.DOMO_BASE_URL }}
-          DOMO_USERNAME: ${{ secrets.DOMO_USERNAME }}
-          DOMO_PASSWORD: ${{ secrets.DOMO_PASSWORD }}
-          DOMO_VENDOR_ID: ${{ secrets.DOMO_VENDOR_ID }}
-          EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
-          EMAIL_SUBJECT: ${{ secrets.EMAIL_SUBJECT }}
-          EMAIL_BODY: ${{ secrets.EMAIL_BODY }}
 
       - name: Upload CSVs
         if: always()
@@ -62,19 +49,4 @@ jobs:
         with:
           name: domo-csv
           path: exporter/downloads/*.csv
-          if-no-files-found: ignore
-
-      - name: npm audit summary
-        run: |
-          npm audit --only=prod --json > audit.json || true
-          if jq -e '.metadata.vulnerabilities.high > 0 or .metadata.vulnerabilities.critical > 0' audit.json >/dev/null; then
-            echo "::warning::High or critical vulnerabilities detected. See audit.json artifact."
-          fi
-
-      - name: Upload npm audit
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: npm-audit
-          path: audit.json
           if-no-files-found: ignore
