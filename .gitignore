@@ -3,3 +3,4 @@ node_modules/
 exporter/downloads/
 .env.example
 .DS_Store
+audit.json
