@@ -50,7 +50,7 @@ async function saveDownload(download: Download, ext = ".xlsx") {
   return target;
 }
 
-function xlsxToCsvFiles(xlsxPath: string) {
+async function xlsxToCsvFiles(xlsxPath: string) {
   const wb = XLSX.readFile(xlsxPath);
   const outFiles: string[] = [];
   for (const sheetName of wb.SheetNames) {
@@ -59,7 +59,7 @@ function xlsxToCsvFiles(xlsxPath: string) {
     const base = path.basename(xlsxPath).replace(/\.(xlsx?)$/i, "");
     const safeSheet = sheetName.replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim();
     const out = path.join(DOWNLOAD_DIR, `${base} - ${safeSheet}.csv`);
-    fs.writeFile(out, csv);
+    await fs.writeFile(out, csv);
     outFiles.push(out);
   }
   return outFiles;
@@ -135,7 +135,7 @@ async function emailCsvs(csvPaths: string[]) {
   // Convert each XLSX to CSV(s)
   const csvs: string[] = [];
   for (const xPath of capturedXlsx) {
-    const out = xlsxToCsvFiles(xPath);
+    const out = await xlsxToCsvFiles(xPath);
     csvs.push(...out);
   }
 
