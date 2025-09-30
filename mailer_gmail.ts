@@ -1,4 +1,5 @@
-import { google } from "@googleapis/gmail";
+import { google } from "googleapis";
+
 import fs from "node:fs/promises";
 import path from "node:path";
 
