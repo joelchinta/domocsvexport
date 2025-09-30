@@ -23,6 +23,31 @@ jobs:
 
       - run: npx playwright install --with-deps chromium
 
+      - name: Mask sensitive secrets in logs
+        shell: bash
+        run: |
+          mask_if_set() {
+            local candidate="$1"
+            if [ -n "$candidate" ]; then
+              echo "::add-mask::${candidate}"
+            fi
+          }
+
+          mask_if_set "${{ secrets.DOMO_BASE_URL }}"
+          mask_if_set "${{ secrets.DOMO_USERNAME }}"
+          mask_if_set "${{ secrets.DOMO_PASSWORD }}"
+          mask_if_set "${{ secrets.DOMO_VENDOR_ID }}"
+          mask_if_set "${{ secrets.EMAIL_USER }}"
+          mask_if_set "${{ secrets.EMAIL_TO }}"
+          mask_if_set "${{ secrets.EMAIL_HOST }}"
+          mask_if_set "${{ secrets.EMAIL_PORT }}"
+          mask_if_set "${{ secrets.EMAIL_PASS }}"
+          mask_if_set "${{ secrets.GOOGLE_CLIENT_ID }}"
+          mask_if_set "${{ secrets.GOOGLE_CLIENT_SECRET }}"
+          mask_if_set "${{ secrets.GOOGLE_REFRESH_TOKEN }}"
+          mask_if_set "${{ secrets.EMAIL_SUBJECT }}"
+          mask_if_set "${{ secrets.EMAIL_BODY }}"
+
       - run: npm start
         env:
           DOMO_BASE_URL: ${{ secrets.DOMO_BASE_URL }}
