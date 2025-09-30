@@ -85,6 +85,57 @@ function logSanitizedInfo(message: string) {
     console.log(maskSensitiveData(message));
 }
 
+const SENSITIVE_ENV_KEYS = [
+    'DOMO_BASE_URL',
+    'DOMO_USERNAME',
+    'DOMO_PASSWORD',
+    'DOMO_VENDOR_ID',
+    'EMAIL_USER',
+    'EMAIL_PASS',
+    'EMAIL_HOST',
+    'EMAIL_PORT',
+    'EMAIL_TO',
+    'GOOGLE_CLIENT_ID',
+    'GOOGLE_CLIENT_SECRET',
+    'GOOGLE_REFRESH_TOKEN'
+] as const;
+
+const sensitiveEnvValues = SENSITIVE_ENV_KEYS
+    .map((key) => process.env[key])
+    .filter((value): value is string => Boolean(value));
+
+function maskSensitiveData(value: string): string {
+    return sensitiveEnvValues.reduce((masked, secret) => {
+        if (!secret) {
+            return masked;
+        }
+        return masked.split(secret).join('[REDACTED]');
+    }, value);
+}
+
+function sanitizeError(error: unknown): string {
+    if (error instanceof Error) {
+        if (error.stack) {
+            return maskSensitiveData(error.stack);
+        }
+        return maskSensitiveData(error.message);
+    }
+
+    if (typeof error === 'string') {
+        return maskSensitiveData(error);
+    }
+
+    try {
+        return maskSensitiveData(JSON.stringify(error));
+    } catch {
+        return 'Unknown error';
+    }
+}
+
+function logSanitizedError(context: string, error: unknown) {
+    console.error(`${context}: ${sanitizeError(error)}`);
+}
+
 function ensureDirectoryExists(filePath: string) {
     const directory = path.dirname(filePath);
     if (!fs.existsSync(directory)) {
