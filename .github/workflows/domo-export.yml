@@ -8,40 +8,79 @@ on:
 permissions:
   contents: read
 
+env:
+  PLAYWRIGHT_BROWSERS_PATH: 0
+
 jobs:
   run-export:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955   # pin commit
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # pin commit
+      - name: Parse payload overrides
+        if: github.event_name == 'repository_dispatch'
+        run: |
+          if command -v jq >/dev/null 2>&1; then
+            FILE="$GITHUB_EVENT_PATH"
+            VENDOR=$(jq -r '.client_payload.vendorId // empty' "$FILE")
+            [ -n "$VENDOR" ] && echo "DOMO_VENDOR_ID=$VENDOR" >> "$GITHUB_ENV"
+            SUBJECT=$(jq -r '.client_payload.emailSubject // empty' "$FILE")
+            [ -n "$SUBJECT" ] && echo "EMAIL_SUBJECT=$SUBJECT" >> "$GITHUB_ENV"
+            START=$(jq -r '.client_payload.startDate // empty' "$FILE")
+            [ -n "$START" ] && echo "DOMO_START_DATE=$START" >> "$GITHUB_ENV"
+            END=$(jq -r '.client_payload.endDate // empty' "$FILE")
+            [ -n "$END" ] && echo "DOMO_END_DATE=$END" >> "$GITHUB_ENV"
+            DBG=$(jq -r '.client_payload.debug // empty' "$FILE")
+            [ -n "$DBG" ] && echo "DEBUG=$DBG" >> "$GITHUB_ENV"
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'
           cache: 'npm'
 
-      - name: Install deps without lifecycle scripts
+      - name: Install deps
         run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Security audit (prod only)
+      - name: Env preflight
+        run: |
+          node -e '
+            const need=["DOMO_BASE_URL","DOMO_USERNAME","DOMO_PASSWORD","DOMO_VENDOR_ID","EMAIL_USER","EMAIL_TO"];
+            const miss=need.filter(k=>!process.env[k]);
+            console.log("present="+(need.length-miss.length)+" missing="+miss.length);
+            if(miss.length){console.error("Missing: "+miss.join(", ")); process.exit(1);}
+            const smtp=!!(process.env.EMAIL_HOST&&process.env.EMAIL_PORT&&process.env.EMAIL_PASS);
+            const oauth=!!(process.env.GOOGLE_CLIENT_ID&&process.env.GOOGLE_CLIENT_SECRET&&process.env.GOOGLE_REFRESH_TOKEN);
+            console.log("hasSMTP="+smtp+" hasOAuth="+oauth);
+            if(!smtp && !oauth){console.error("Email creds missing"); process.exit(1);}
+          '
+
+      - name: Audit minimal
         run: |
           npm audit --only=prod --json > audit.json || true
           if jq -e '.metadata.vulnerabilities.high > 0 or .metadata.vulnerabilities.critical > 0' audit.json >/dev/null; then
             echo "::warning::High or critical vulnerabilities detected. See audit.json artifact."
           fi
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload audit report
         if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: npm-audit
           path: audit.json
 
       - name: Run exporter
         env:
-          PLAYWRIGHT_BROWSERS_PATH: 0
+          DEBUG: ${{ env.DEBUG }}
           DOMO_BASE_URL: ${{ secrets.DOMO_BASE_URL }}
           DOMO_USERNAME: ${{ secrets.DOMO_USERNAME }}
           DOMO_PASSWORD: ${{ secrets.DOMO_PASSWORD }}
@@ -56,4 +95,6 @@ jobs:
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
           EMAIL_SUBJECT: ${{ env.EMAIL_SUBJECT != '' && env.EMAIL_SUBJECT || secrets.EMAIL_SUBJECT }}
           EMAIL_BODY: ${{ secrets.EMAIL_BODY }}
+          DOMO_START_DATE: ${{ env.DOMO_START_DATE }}
+          DOMO_END_DATE: ${{ env.DOMO_END_DATE }}
         run: node --experimental-strip-types domo_export.ts
