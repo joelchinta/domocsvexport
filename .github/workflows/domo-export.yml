@@ -1,9 +1,9 @@
 name: Domo Export
 
 on:
+  repository_dispatch:
+    types: [domo_export]
   workflow_dispatch:
-  schedule:
-    - cron: '0 12 * * 1' # Mondays at 12:00 UTC
 
 env:
   PLAYWRIGHT_BROWSERS_PATH: 0
@@ -11,13 +11,21 @@ env:
 jobs:
   run-export:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+
+      - name: Optional payload overrides from webhook
+        run: |
+          if [ -f "$GITHUB_EVENT_PATH" ] && command -v jq >/dev/null 2>&1; then
+            VENDOR=$(jq -r '.client_payload.vendorId // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)
+            if [ -n "$VENDOR" ]; then echo "DOMO_VENDOR_ID=$VENDOR" >> "$GITHUB_ENV"; fi
+            SUBJECT=$(jq -r '.client_payload.emailSubject // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)
+            if [ -n "$SUBJECT" ]; then echo "EMAIL_SUBJECT=$SUBJECT" >> "$GITHUB_ENV"; fi
+          fi
 
       - run: npm ci
 
@@ -28,7 +36,7 @@ jobs:
           DOMO_BASE_URL: ${{ secrets.DOMO_BASE_URL }}
           DOMO_USERNAME: ${{ secrets.DOMO_USERNAME }}
           DOMO_PASSWORD: ${{ secrets.DOMO_PASSWORD }}
-          DOMO_VENDOR_ID: ${{ secrets.DOMO_VENDOR_ID }}
+          DOMO_VENDOR_ID: ${{ env.DOMO_VENDOR_ID != '' && env.DOMO_VENDOR_ID || secrets.DOMO_VENDOR_ID }}
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           EMAIL_HOST: ${{ secrets.EMAIL_HOST }}
@@ -37,5 +45,5 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
-          EMAIL_SUBJECT: ${{ secrets.EMAIL_SUBJECT }}
+          EMAIL_SUBJECT: ${{ env.EMAIL_SUBJECT != '' && env.EMAIL_SUBJECT || secrets.EMAIL_SUBJECT }}
           EMAIL_BODY: ${{ secrets.EMAIL_BODY }}
