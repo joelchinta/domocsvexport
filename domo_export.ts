@@ -33,6 +33,61 @@ if (!hasBasicSmtpCreds && !hasGoogleOAuthCreds) {
 
 const XLSXLib: typeof XLSX & { default?: typeof XLSX } = (XLSX as any).default ?? (XLSX as any);
 
+const SENSITIVE_ENV_KEYS = [
+    'DOMO_BASE_URL',
+    'DOMO_USERNAME',
+    'DOMO_PASSWORD',
+    'DOMO_VENDOR_ID',
+    'EMAIL_USER',
+    'EMAIL_PASS',
+    'EMAIL_HOST',
+    'EMAIL_PORT',
+    'EMAIL_TO',
+    'GOOGLE_CLIENT_ID',
+    'GOOGLE_CLIENT_SECRET',
+    'GOOGLE_REFRESH_TOKEN'
+] as const;
+
+const sensitiveEnvValues = SENSITIVE_ENV_KEYS
+    .map((key) => process.env[key])
+    .filter((value): value is string => Boolean(value));
+
+function maskSensitiveData(value: string): string {
+    return sensitiveEnvValues.reduce((masked, secret) => {
+        if (!secret) {
+            return masked;
+        }
+        return masked.split(secret).join('[REDACTED]');
+    }, value);
+}
+
+function sanitizeError(error: unknown): string {
+    if (error instanceof Error) {
+        if (error.stack) {
+            return maskSensitiveData(error.stack);
+        }
+        return maskSensitiveData(error.message);
+    }
+
+    if (typeof error === 'string') {
+        return maskSensitiveData(error);
+    }
+
+    try {
+        return maskSensitiveData(JSON.stringify(error));
+    } catch {
+        return 'Unknown error';
+    }
+}
+
+function logSanitizedError(context: string, error: unknown) {
+    console.error(`${context}: ${sanitizeError(error)}`);
+}
+
+function logSanitizedInfo(message: string) {
+    console.log(maskSensitiveData(message));
+}
+
 function ensureDirectoryExists(filePath: string) {
     const directory = path.dirname(filePath);
     if (!fs.existsSync(directory)) {
@@ -64,7 +119,7 @@ async function getGmailAccessToken(): Promise<string> {
 
     if (!response.ok) {
         const errorBody = await response.text().catch(() => '<no body>');
-        throw new Error(`Failed to fetch Gmail access token: ${response.status} ${response.statusText} - ${errorBody}`);
+        throw new Error(`Failed to fetch Gmail access token: ${response.status} ${response.statusText} - ${maskSensitiveData(errorBody)}`);
     }
 
     const tokenPayload = await response.json();
@@ -221,17 +276,20 @@ async function main() {
         // Send email with CSV attachment
         const recipientCount = await sendReportEmail(csvPath, startDate, endDate);
 
-        console.log('Export completed successfully!');
-        console.log(`Date range: ${startDate} to ${endDate}`);
-        console.log(`File saved as: ${path.basename(csvPath)}`);
-        console.log(`Email sent to ${recipientCount} recipient(s).`);
+        logSanitizedInfo('Export completed successfully!');
+        logSanitizedInfo(`Date range: ${startDate} to ${endDate}`);
+        logSanitizedInfo(`File saved as: ${path.basename(csvPath)}`);
+        logSanitizedInfo(`Email sent to ${recipientCount} recipient(s).`);
 
     } catch (error) {
-        console.error('An error occurred:', error);
+        logSanitizedError('An error occurred', error);
         throw error;
     } finally {
         await browser.close();
     }
 }
 
-main().catch(console.error);
+main().catch((error) => {
+    logSanitizedError('Unhandled error in main', error);
+    process.exitCode = 1;
+});
