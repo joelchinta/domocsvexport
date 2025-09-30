@@ -10,6 +10,6 @@
     "dotenv": "^17.2.3",
     "nodemailer": "^6.9.13",
     "playwright": "^1.47.2",
-    "xlsx": "^0.20.2"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   }
 }
