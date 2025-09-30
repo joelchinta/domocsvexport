@@ -8,230 +8,246 @@ import * as nodemailer from 'nodemailer';
 // Load environment variables
 dotenv.config();
 
-// Validate required environment variables
-const alwaysRequiredEnv = [
-    'DOMO_BASE_URL', 'DOMO_USERNAME', 'DOMO_PASSWORD', 'DOMO_VENDOR_ID',
-    'EMAIL_USER', 'EMAIL_TO'
-];
-for (const envVar of alwaysRequiredEnv) {
-    if (!process.env[envVar]) {
-        throw new Error(`Missing required environment variable: ${envVar}`);
-    }
+// ---------- Config and guards ----------
+const REQ_ENV = [
+  'DOMO_BASE_URL', 'DOMO_USERNAME', 'DOMO_PASSWORD', 'DOMO_VENDOR_ID',
+  'EMAIL_USER', 'EMAIL_TO'
+] as const;
+
+for (const k of REQ_ENV) {
+  if (!process.env[k]) throw new Error(`Missing required environment variable: ${k}`);
 }
 
-const hasBasicSmtpCreds = Boolean(
-    process.env.EMAIL_HOST && process.env.EMAIL_PORT && process.env.EMAIL_PASS
-);
+const DEBUG = process.env.DEBUG === '1';
 
-const hasGoogleOAuthCreds = Boolean(
-    process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REFRESH_TOKEN
-);
+// Email credential modes
+const hasBasicSmtpCreds =
+  Boolean(process.env.EMAIL_HOST && process.env.EMAIL_PORT && process.env.EMAIL_PASS);
+
+const hasGoogleOAuthCreds =
+  Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REFRESH_TOKEN);
 
 if (!hasBasicSmtpCreds && !hasGoogleOAuthCreds) {
-    throw new Error('Missing email credentials: provide either EMAIL_HOST/EMAIL_PORT/EMAIL_PASS or GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REFRESH_TOKEN');
+  throw new Error('Missing email credentials: provide either EMAIL_HOST/EMAIL_PORT/EMAIL_PASS or GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REFRESH_TOKEN');
 }
 
-const XLSXLib: typeof XLSX & { default?: typeof XLSX } = (XLSX as any).default ?? (XLSX as any);
+// Optional overrides
+const ENV_START = (process.env.DOMO_START_DATE || '').trim(); // YYYY-MM-DD
+const ENV_END   = (process.env.DOMO_END_DATE || '').trim();   // YYYY-MM-DD
+const EXPORT_DIR = path.resolve('./exporter/downloads');
+const EXPORT_SELECTOR = process.env.DOMO_EXPORT_SELECTOR || '.dt-button.buttons-excel';
+
+// ---------- Utils ----------
+function logDebug(msg: string) {
+  if (DEBUG) console.log(msg);
+}
 
 function ensureDirectoryExists(filePath: string) {
-    const directory = path.dirname(filePath);
-    if (!fs.existsSync(directory)) {
-        fs.mkdirSync(directory, { recursive: true });
-    }
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
 function formatTemplate(template: string, startDate: string, endDate: string) {
-    return template
-        .replaceAll('{startDate}', startDate)
-        .replaceAll('{endDate}', endDate);
+  return template.replaceAll('{startDate}', startDate).replaceAll('{endDate}', endDate);
 }
 
 async function getGmailAccessToken(): Promise<string> {
-    const params = new URLSearchParams({
-        client_id: process.env.GOOGLE_CLIENT_ID!,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET!,
-        refresh_token: process.env.GOOGLE_REFRESH_TOKEN!,
-        grant_type: 'refresh_token'
-    });
+  const params = new URLSearchParams({
+    client_id: process.env.GOOGLE_CLIENT_ID!,
+    client_secret: process.env.GOOGLE_CLIENT_SECRET!,
+    refresh_token: process.env.GOOGLE_REFRESH_TOKEN!,
+    grant_type: 'refresh_token'
+  });
 
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/x-www-form-urlencoded'
-        },
-        body: params.toString()
-    });
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString()
+  });
 
-    if (!response.ok) {
-        const errorBody = await response.text().catch(() => '<no body>');
-        throw new Error(`Failed to fetch Gmail access token: ${response.status} ${response.statusText} - ${errorBody}`);
-    }
+  if (!res.ok) {
+    // Avoid echoing entire response body in logs
+    throw new Error(`Failed to fetch Gmail access token: ${res.status} ${res.statusText}`);
+  }
 
-    const tokenPayload = await response.json();
-    const accessToken = tokenPayload.access_token as string | undefined;
-
-    if (!accessToken) {
-        throw new Error('Gmail token response did not include access_token');
-    }
-
-    return accessToken;
+  const json = await res.json();
+  const token = json?.access_token as string | undefined;
+  if (!token) throw new Error('Gmail token response missing access_token');
+  return token;
 }
 
 async function createEmailTransporter() {
-    if (hasGoogleOAuthCreds) {
-        const accessToken = await getGmailAccessToken();
-        return nodemailer.createTransport({
-            service: 'gmail',
-            auth: {
-                type: 'OAuth2',
-                user: process.env.EMAIL_USER,
-                clientId: process.env.GOOGLE_CLIENT_ID,
-                clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-                refreshToken: process.env.GOOGLE_REFRESH_TOKEN,
-                accessToken
-            },
-        });
-    }
-
+  if (hasGoogleOAuthCreds) {
+    const accessToken = await getGmailAccessToken();
     return nodemailer.createTransport({
-        host: process.env.EMAIL_HOST,
-        port: parseInt(process.env.EMAIL_PORT!, 10),
-        secure: process.env.EMAIL_PORT === '465',
-        auth: {
-            user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASS,
-        },
+      service: 'gmail',
+      auth: {
+        type: 'OAuth2',
+        user: process.env.EMAIL_USER,
+        clientId: process.env.GOOGLE_CLIENT_ID,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        refreshToken: process.env.GOOGLE_REFRESH_TOKEN,
+        accessToken
+      }
     });
+  }
+
+  const port = Number.parseInt(process.env.EMAIL_PORT!, 10);
+  return nodemailer.createTransport({
+    host: process.env.EMAIL_HOST,
+    port,
+    secure: port === 465,
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS
+    }
+  });
 }
 
 async function sendReportEmail(csvPath: string, startDate: string, endDate: string) {
-    const transporter = await createEmailTransporter();
+  const transporter = await createEmailTransporter();
 
-    await transporter.verify();
-
-    const recipients = process.env.EMAIL_TO!
-        .split(',')
-        .map(address => address.trim())
-        .filter(Boolean);
-
-    if (!recipients.length) {
-        throw new Error('EMAIL_TO must contain at least one valid recipient address.');
+  // Only verify and print diagnostics in DEBUG
+  if (DEBUG) {
+    try {
+      await transporter.verify();
+      logDebug('SMTP verified');
+    } catch {
+      logDebug('SMTP verify failed, continuing to send');
     }
+  }
 
-    const subjectTemplate = process.env.EMAIL_SUBJECT || 'Domo Export Report ({startDate} to {endDate})';
-    const bodyTemplate = process.env.EMAIL_BODY || 'Please find attached the Domo export report for the period {startDate} to {endDate}.';
+  const recipients = process.env.EMAIL_TO!
+    .split(',')
+    .map(a => a.trim())
+    .filter(Boolean);
 
-    const subject = formatTemplate(subjectTemplate, startDate, endDate);
-    const body = formatTemplate(bodyTemplate, startDate, endDate);
+  if (!recipients.length) throw new Error('EMAIL_TO must contain at least one recipient');
 
-    await transporter.sendMail({
-        from: process.env.EMAIL_USER,
-        to: recipients,
-        subject,
-        text: body,
-        attachments: [
-            {
-                filename: path.basename(csvPath),
-                path: csvPath
-            }
-        ]
-    });
+  const subjectTemplate = process.env.EMAIL_SUBJECT || 'Domo Export Report ({startDate} to {endDate})';
+  const bodyTemplate = process.env.EMAIL_BODY || 'Please find attached the Domo export report for the period {startDate} to {endDate}.';
 
-    return recipients.length;
+  const subject = formatTemplate(subjectTemplate, startDate, endDate);
+  const body = formatTemplate(bodyTemplate, startDate, endDate);
+
+  await transporter.sendMail({
+    from: process.env.EMAIL_USER,
+    to: recipients,
+    subject,
+    text: body,
+    attachments: [{ filename: path.basename(csvPath), path: csvPath }]
+  });
+
+  return recipients.length;
+}
+
+function isValidISODate(s: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(s);
 }
 
 async function getPreviousMondayAndSunday(): Promise<[string, string]> {
-    const today = new Date();
-    const lastMonday = new Date(today);
-    // First, go back to this week's Monday
-    lastMonday.setDate(today.getDate() - today.getDay() + 1);
-    // Then go back one more week
-    lastMonday.setDate(lastMonday.getDate() - 7);
-    
-    const lastSunday = new Date(lastMonday);
-    lastSunday.setDate(lastMonday.getDate() + 6);
+  // Local timezone logic. Override with DOMO_START_DATE/DOMO_END_DATE if provided.
+  if (isValidISODate(ENV_START) && isValidISODate(ENV_END)) {
+    return [ENV_START, ENV_END];
+  }
 
-    // Format dates as YYYY-MM-DD
-    const formatDate = (date: Date) => {
-        return date.toISOString().split('T')[0];
-    };
+  const today = new Date();
+  // JS: Sunday=0...Saturday=6
+  const day = today.getDay();
+  // Go to this week's Monday
+  const thisMonday = new Date(today);
+  const deltaToMonday = ((day + 6) % 7); // 0 if Monday, 1 if Tuesday, ... 6 if Sunday
+  thisMonday.setDate(today.getDate() - deltaToMonday);
+  // Last week's Monday
+  const lastMonday = new Date(thisMonday);
+  lastMonday.setDate(thisMonday.getDate() - 7);
+  // Last week's Sunday
+  const lastSunday = new Date(lastMonday);
+  lastSunday.setDate(lastMonday.getDate() + 6);
 
-    return [formatDate(lastMonday), formatDate(lastSunday)];
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+  return [fmt(lastMonday), fmt(lastSunday)];
 }
 
 async function main() {
-    const browser = await chromium.launch({
-        headless: true
-    });
+  const browser = await chromium.launch({ headless: true });
 
-    try {
-        const context = await browser.newContext();
-        const page = await context.newPage();
+  try {
+    const context = await browser.newContext({ acceptDownloads: true });
+    const page = await context.newPage();
 
-        // Login
-        await page.goto(`${process.env.DOMO_BASE_URL}/session/login`);
-        await page.locator('input[name="username"]').click();
-        await page.locator('input[name="username"]').fill(process.env.DOMO_USERNAME!);
-        await page.locator('input[name="password"]').fill(process.env.DOMO_PASSWORD!);
-        await page.getByRole('button', { name: 'Sign in' }).click();
+    // Login
+    await page.goto(`${process.env.DOMO_BASE_URL}/session/login`, { waitUntil: 'domcontentloaded' });
+    await page.locator('input[name="username"]').fill(process.env.DOMO_USERNAME!);
+    await page.locator('input[name="password"]').fill(process.env.DOMO_PASSWORD!);
+    await page.getByRole('button', { name: 'Sign in' }).click();
 
-        // Wait for login to complete
-        await page.waitForTimeout(2000);
+    // Wait for navigation post-login. If the app does not navigate, fall back to a short wait.
+    await Promise.race([
+      page.waitForLoadState('networkidle', { timeout: 10_000 }),
+      page.waitForTimeout(2_000)
+    ]);
 
-        // Get date range
-        const [startDate, endDate] = await getPreviousMondayAndSunday();
+    // Date range
+    const [startDate, endDate] = await getPreviousMondayAndSunday();
+    logDebug(`Using date range ${startDate} to ${endDate}`);
 
-        // Navigate directly to the transaction slip URL
-        const url = `${process.env.DOMO_BASE_URL}/transactions/slipSingle/${process.env.DOMO_VENDOR_ID}/${startDate}/${endDate}/1`;
-        await page.goto(url);
+    // Navigate to slip page
+    const url = `${process.env.DOMO_BASE_URL}/transactions/slipSingle/${process.env.DOMO_VENDOR_ID}/${startDate}/${endDate}/1`;
+    await page.goto(url, { waitUntil: 'networkidle' });
 
-        // Wait for the page to load
-        await page.waitForLoadState('networkidle');
+    // Wait for export control
+    await page.waitForSelector(EXPORT_SELECTOR, { timeout: 30_000 });
 
-        // Wait for table to load and export button to be visible
-        await page.waitForSelector('.dt-button.buttons-excel');
+    // Prepare download
+    const downloadPromise = page.waitForEvent('download');
 
-        // Setup download promise before clicking the export button
-        const downloadPromise = page.waitForEvent('download');
-        
-        // Click the Excel export button
-        await page.click('.dt-button.buttons-excel');
+    // Trigger export
+    await page.click(EXPORT_SELECTOR);
 
-        // Wait for the download to start and save the file
-        const download = await downloadPromise;
-        const xlsxPath = `./exporter/downloads/domo_export_${startDate}_to_${endDate}.xlsx`;
-        ensureDirectoryExists(xlsxPath);
-        await download.saveAs(xlsxPath);
+    // Save XLSX
+    const download = await downloadPromise;
+    const suggested = download.suggestedFilename();
+    const baseName = suggested && suggested.toLowerCase().endsWith('.xlsx')
+      ? suggested
+      : `domo_export_${startDate}_to_${endDate}.xlsx`;
+    const xlsxPath = path.join(EXPORT_DIR, baseName);
+    ensureDirectoryExists(xlsxPath);
+    await download.saveAs(xlsxPath);
 
-        // Convert XLSX to CSV
-        const workbook = XLSXLib.readFile(xlsxPath);
-        const csvPath = `./exporter/downloads/domo_export_${startDate}_to_${endDate}.csv`;
-        
-        // Get the first worksheet
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        
-        // Convert to CSV and save
-        const csvContent = XLSXLib.utils.sheet_to_csv(worksheet);
-        fs.writeFileSync(csvPath, csvContent);
+    // Convert to CSV
+    const workbook = (XLSX as any).default ? (XLSX as any).default.readFile(xlsxPath) : XLSX.readFile(xlsxPath);
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    const csvContent = XLSX.utils.sheet_to_csv(worksheet);
+    const csvPath = path.join(EXPORT_DIR, path.basename(baseName).replace(/\.xlsx$/i, '.csv'));
+    fs.writeFileSync(csvPath, csvContent);
 
-        // Delete the XLSX file if you don't need it
-        fs.unlinkSync(xlsxPath);
+    // Clean xlsx to minimize artifacts
+    try { fs.unlinkSync(xlsxPath); } catch {}
 
-        // Send email with CSV attachment
-        const recipientCount = await sendReportEmail(csvPath, startDate, endDate);
+    // Email report
+    const recipientCount = await sendReportEmail(csvPath, startDate, endDate);
 
-        console.log('Export completed successfully!');
-        console.log(`Date range: ${startDate} to ${endDate}`);
-        console.log(`File saved as: ${path.basename(csvPath)}`);
-        console.log(`Email sent to ${recipientCount} recipient(s).`);
+    // Minimal logs
+    console.log('Export completed');
+    console.log('Email sent');
 
-    } catch (error) {
-        console.error('An error occurred:', error);
-        throw error;
-    } finally {
-        await browser.close();
-    }
+    // Extra diagnostics only if DEBUG
+    logDebug(`File: ${path.basename(csvPath)}`);
+    logDebug(`Recipients: ${recipientCount}`);
+    logDebug(`Date range: ${startDate} to ${endDate}`);
+
+  } catch (err: any) {
+    // Do not dump objects that might include sensitive info
+    const msg = err?.message || String(err);
+    console.error('Worker failed');
+    if (DEBUG && err?.stack) console.error(err.stack);
+    else console.error(msg);
+    throw err;
+  } finally {
+    await browser.close();
+  }
 }
 
-main().catch(console.error);
+main().catch(() => process.exit(1));
