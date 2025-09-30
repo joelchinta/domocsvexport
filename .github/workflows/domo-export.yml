@@ -1,59 +1,79 @@
 name: Domo Export
 
 on:
-  repository_dispatch:
-    types: [domo_export]
   workflow_dispatch:
+  schedule:
+    - cron: '0 12 * * 1' # Mondays 12:00 UTC. For 12:00 Brunei use 0 4 * * 1.
 
-permissions:
-  contents: read
+env:
+  PLAYWRIGHT_BROWSERS_PATH: 0
+  NODE_OPTIONS: --enable-source-maps
 
 jobs:
   run-export:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955   # pin commit
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
-          persist-credentials: false
+          node-version: 22
+          cache: npm
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # pin commit
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - run: npx playwright install --with-deps chromium
+
+      - name: Preflight env check
+        run: node preflight.mjs
+        env:
+          DOMO_BASE_URL: ${{ secrets.DOMO_BASE_URL }}
+          DOMO_USERNAME: ${{ secrets.DOMO_USERNAME }}
+          DOMO_PASSWORD: ${{ secrets.DOMO_PASSWORD }}
+          DOMO_VENDOR_ID: ${{ secrets.DOMO_VENDOR_ID }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+
+      - run: mkdir -p exporter/downloads
+
+      - name: Run exporter
+        run: node --experimental-strip-types domo_export.ts
+        env:
+          DOMO_BASE_URL: ${{ secrets.DOMO_BASE_URL }}
+          DOMO_USERNAME: ${{ secrets.DOMO_USERNAME }}
+          DOMO_PASSWORD: ${{ secrets.DOMO_PASSWORD }}
+          DOMO_VENDOR_ID: ${{ secrets.DOMO_VENDOR_ID }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          EMAIL_SUBJECT: ${{ secrets.EMAIL_SUBJECT }}
+          EMAIL_BODY: ${{ secrets.EMAIL_BODY }}
+
+      - name: Upload CSVs
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          node-version: '22'
-          cache: 'npm'
+          name: domo-csv
+          path: exporter/downloads/*.csv
+          if-no-files-found: ignore
 
-      - name: Install deps without lifecycle scripts
-        run: npm ci --ignore-scripts --no-audit --no-fund
-
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: Security audit (prod only)
+      - name: npm audit summary
         run: |
           npm audit --only=prod --json > audit.json || true
           if jq -e '.metadata.vulnerabilities.high > 0 or .metadata.vulnerabilities.critical > 0' audit.json >/dev/null; then
             echo "::warning::High or critical vulnerabilities detected. See audit.json artifact."
           fi
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload npm audit
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: npm-audit
           path: audit.json
-
-      - name: Run exporter
-        env:
-          PLAYWRIGHT_BROWSERS_PATH: 0
-          DOMO_BASE_URL: ${{ secrets.DOMO_BASE_URL }}
-          DOMO_USERNAME: ${{ secrets.DOMO_USERNAME }}
-          DOMO_PASSWORD: ${{ secrets.DOMO_PASSWORD }}
-          DOMO_VENDOR_ID: ${{ env.DOMO_VENDOR_ID != '' && env.DOMO_VENDOR_ID || secrets.DOMO_VENDOR_ID }}
-          EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
-          EMAIL_HOST: ${{ secrets.EMAIL_HOST }}
-          EMAIL_PORT: ${{ secrets.EMAIL_PORT }}
-          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
-          EMAIL_SUBJECT: ${{ env.EMAIL_SUBJECT != '' && env.EMAIL_SUBJECT || secrets.EMAIL_SUBJECT }}
-          EMAIL_BODY: ${{ secrets.EMAIL_BODY }}
-        run: node --experimental-strip-types domo_export.ts
+          if-no-files-found: ignore
