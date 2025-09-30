@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { chromium, Download } from "playwright";
 import * as XLSX from "xlsx";
-import { sendWithGmailAPI } from "./mailer_gmail.js";
+import { sendWithGmailAPI } from "./mailer_gmail.ts";
 
 // ---------- config ----------
 const DOWNLOAD_DIR = path.resolve("exporter/downloads");
