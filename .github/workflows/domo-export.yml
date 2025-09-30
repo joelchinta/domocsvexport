@@ -5,59 +5,37 @@ on:
     types: [domo_export]
   workflow_dispatch:
 
-permissions:
-  contents: read
-  # id-token: write  # only if you later use OIDC
+env:
+  PLAYWRIGHT_BROWSERS_PATH: 0
 
 jobs:
   run-export:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          fetch-depth: 1
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-          cache: 'npm'
+          node-version: '22'
 
-      - name: Mask secrets
-        run: |
-          echo "::add-mask::$DOMO_USERNAME"
-          echo "::add-mask::$DOMO_VENDOR_ID"
-          echo "::add-mask::$EMAIL_USER"
-          echo "::add-mask::$EMAIL_TO"
+      - run: npm ci
+
+      - run: npx playwright install --with-deps chromium
+
+      - run: npm start
         env:
-          DOMO_USERNAME: ${{ secrets.DOMO_USERNAME }}
-          DOMO_VENDOR_ID: ${{ secrets.DOMO_VENDOR_ID }}
-          EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
-
-      - name: Install deps
-        run: npm ci --ignore-scripts --no-audit --no-fund
-
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: Run exporter
-        env:
-          NODE_ENV: production
-          LOG_LEVEL: warn
-          PLAYWRIGHT_BROWSERS_PATH: 0
           DOMO_BASE_URL: ${{ secrets.DOMO_BASE_URL }}
           DOMO_USERNAME: ${{ secrets.DOMO_USERNAME }}
           DOMO_PASSWORD: ${{ secrets.DOMO_PASSWORD }}
           DOMO_VENDOR_ID: ${{ secrets.DOMO_VENDOR_ID }}
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           EMAIL_HOST: ${{ secrets.EMAIL_HOST }}
           EMAIL_PORT: ${{ secrets.EMAIL_PORT }}
-          EMAIL_SUBJECT: ${{ secrets.EMAIL_SUBJECT }}
-          EMAIL_BODY: ${{ secrets.EMAIL_BODY }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
-        run: npm start
+          EMAIL_SUBJECT: ${{ secrets.EMAIL_SUBJECT }}
+          EMAIL_BODY: ${{ secrets.EMAIL_BODY }}
