@@ -1,6 +1,7 @@
 {
   "name": "domo-exporter",
   "version": "1.0.0",
+  "private": true,
   "type": "module",
   "scripts": {
     "start": "node --experimental-strip-types domo_export.ts"
@@ -9,6 +10,6 @@
     "dotenv": "^17.2.3",
     "nodemailer": "^6.9.13",
     "playwright": "^1.47.2",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.20.2"
   }
 }
